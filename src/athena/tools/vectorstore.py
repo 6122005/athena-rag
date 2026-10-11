@@ -116,17 +116,35 @@ def get_chroma_client(persist_dir: str = "./chroma_db"):
     return _chroma_client
 
 
-def get_vectorstore(persist_dir: str = "./chroma_db") -> Chroma:
-    """Get or initialize singleton Chroma vector store with explicit client injection."""
+def get_vectorstore(persist_dir: str = "./chroma_db"):
+    """Get or initialize singleton vector store. Falls back to InMemoryVectorStore if needed."""
     global _vectorstore
-    if _vectorstore is None:
+    if _vectorstore is not None:
+        return _vectorstore
+
+    # 1. Attempt Chroma with explicit client
+    try:
         client = get_chroma_client(persist_dir=persist_dir)
         _vectorstore = Chroma(
             client=client,
             collection_name="athena_knowledge",
             embedding_function=_get_embeddings(),
         )
-    return _vectorstore
+        return _vectorstore
+    except Exception as exc:
+        logger.warning(
+            f"Chroma store initialization encountered '{exc}'. "
+            "Falling back to InMemoryVectorStore for cloud resilience."
+        )
+
+    # 2. Resilient fallback to LangChain's InMemoryVectorStore
+    try:
+        from langchain_core.vectorstores import InMemoryVectorStore
+        _vectorstore = InMemoryVectorStore(embedding=_get_embeddings())
+        return _vectorstore
+    except Exception as exc2:
+        logger.error(f"Failed to initialize vector store: {exc2}")
+        raise exc2
 
 
 def reset_vectorstore():
@@ -142,7 +160,8 @@ def build_vectorstore(
     callback: Callable[[int, int], None] | None = None,
     batch_size: int = 20,
 ):
-    """Build or update a Chroma vector store with batch indexing and live progress callback."""
+    """Build or update a vector store with batch indexing and live progress callback."""
+    global _vectorstore
     store = get_vectorstore(persist_dir=persist_dir)
 
     documents = [
@@ -154,12 +173,24 @@ def build_vectorstore(
     if total == 0:
         return store
 
-    # Ingest in chunks of 20 for memory safety on Streamlit Cloud containers
-    for i in range(0, total, batch_size):
-        batch = documents[i : i + batch_size]
-        store.add_documents(batch)
-        if callback:
-            callback(min(i + batch_size, total), total)
+    try:
+        for i in range(0, total, batch_size):
+            batch = documents[i : i + batch_size]
+            store.add_documents(batch)
+            if callback:
+                callback(min(i + batch_size, total), total)
+    except Exception as exc:
+        logger.warning(
+            f"Failed to add documents to primary store ({exc}). Switching to InMemoryVectorStore fallback."
+        )
+        from langchain_core.vectorstores import InMemoryVectorStore
+        _vectorstore = InMemoryVectorStore(embedding=_get_embeddings())
+        for i in range(0, total, batch_size):
+            batch = documents[i : i + batch_size]
+            _vectorstore.add_documents(batch)
+            if callback:
+                callback(min(i + batch_size, total), total)
+        return _vectorstore
 
     return store
 
