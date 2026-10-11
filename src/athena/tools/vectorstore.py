@@ -13,6 +13,7 @@ from athena.model import get_config
 logger = logging.getLogger("athena.vectorstore")
 
 _embeddings = None
+_chroma_client = None
 _vectorstore = None
 
 
@@ -83,6 +84,58 @@ def _get_embeddings():
     return _embeddings
 
 
+def get_chroma_client(persist_dir: str = "./chroma_db"):
+    """
+    Get or create a robust ChromaDB client.
+    Attempts PersistentClient with absolute directory first.
+    If persistent initialization fails (e.g. tenant error, disk permissions on Streamlit Cloud),
+    transparently falls back to EphemeralClient (in-memory) so document ingestion never crashes.
+    """
+    global _chroma_client
+    if _chroma_client is not None:
+        return _chroma_client
+
+    import chromadb
+    from chromadb.config import Settings
+
+    abs_path = os.path.abspath(persist_dir)
+    try:
+        os.makedirs(abs_path, exist_ok=True)
+        settings = Settings(anonymized_telemetry=False, allow_reset=True)
+        _chroma_client = chromadb.PersistentClient(path=abs_path, settings=settings)
+        _chroma_client.heartbeat()
+        logger.info(f"Initialized ChromaDB PersistentClient at {abs_path}")
+    except Exception as exc:
+        logger.warning(
+            f"PersistentClient initialization encountered '{exc}'. "
+            "Falling back to in-memory EphemeralClient for cloud resilience."
+        )
+        settings = Settings(anonymized_telemetry=False, allow_reset=True)
+        _chroma_client = chromadb.EphemeralClient(settings=settings)
+
+    return _chroma_client
+
+
+def get_vectorstore(persist_dir: str = "./chroma_db") -> Chroma:
+    """Get or initialize singleton Chroma vector store with explicit client injection."""
+    global _vectorstore
+    if _vectorstore is None:
+        client = get_chroma_client(persist_dir=persist_dir)
+        _vectorstore = Chroma(
+            client=client,
+            collection_name="athena_knowledge",
+            embedding_function=_get_embeddings(),
+        )
+    return _vectorstore
+
+
+def reset_vectorstore():
+    """Reset the singleton vector store and Chroma client."""
+    global _vectorstore, _chroma_client
+    _vectorstore = None
+    _chroma_client = None
+
+
 def build_vectorstore(
     docs: list[dict],
     persist_dir: str = "./chroma_db",
@@ -90,41 +143,29 @@ def build_vectorstore(
     batch_size: int = 20,
 ):
     """Build or update a Chroma vector store with batch indexing and live progress callback."""
-    global _vectorstore
+    store = get_vectorstore(persist_dir=persist_dir)
 
     documents = [
         Document(page_content=d["content"], metadata={"source": d["source"], **d.get("metadata", {})})
         for d in docs
     ]
 
-    if _vectorstore is None:
-        _vectorstore = Chroma(
-            embedding_function=_get_embeddings(),
-            persist_directory=persist_dir,
-            collection_name="athena_knowledge",
-        )
-
     total = len(documents)
     if total == 0:
-        return _vectorstore
+        return store
 
     # Ingest in chunks of 20 for memory safety on Streamlit Cloud containers
     for i in range(0, total, batch_size):
         batch = documents[i : i + batch_size]
-        _vectorstore.add_documents(batch)
+        store.add_documents(batch)
         if callback:
             callback(min(i + batch_size, total), total)
 
-    return _vectorstore
+    return store
 
 
 def get_retriever(k: int = 4, persist_dir: str = "./chroma_db"):
     """Return a similarity retriever. Builds empty store if none exists."""
-    global _vectorstore
-    if _vectorstore is None:
-        _vectorstore = Chroma(
-            embedding_function=_get_embeddings(),
-            persist_directory=persist_dir,
-            collection_name="athena_knowledge",
-        )
-    return _vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": k})
+    store = get_vectorstore(persist_dir=persist_dir)
+    return store.as_retriever(search_type="similarity", search_kwargs={"k": k})
+

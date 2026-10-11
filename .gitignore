@@ -13,8 +13,11 @@ env/
 
 # Data and Local Vector Store
 chroma_db/
+test_chroma*/
+test_db*/
 *.db
 *.sqlite3
+
 
 # Environment variables
 .env
