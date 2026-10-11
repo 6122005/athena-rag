@@ -8,5 +8,6 @@ src_dir = Path(__file__).resolve().parent / "src"
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-# Run the Athena RAG Streamlit application
-import athena.ui
+from athena.ui import main
+
+main()
