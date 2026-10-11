@@ -1,0 +1,14 @@
+[
+  {
+    "source": "rag_intro.md",
+    "content": "Retrieval-Augmented Generation (RAG) combines a retrieval system with a language model. The retriever fetches relevant documents from a knowledge base, and the generator uses those documents as context to produce grounded answers. RAG reduces hallucination by anchoring generation in retrieved evidence."
+  },
+  {
+    "source": "agentic_rag.md",
+    "content": "Agentic RAG extends standard RAG by allowing the agent to decide when and how to retrieve. Unlike 2-step RAG which always retrieves before generating, agentic RAG can grade retrieval quality, rewrite failed queries, and retry. This self-correction loop improves answer accuracy on ambiguous questions."
+  },
+  {
+    "source": "vector_stores.md",
+    "content": "Vector stores index document embeddings for similarity search. ChromaDB is suitable for local development. For production at scale, Qdrant and Milvus offer distributed indexing and filtering. The choice of vector store affects retrieval latency and scalability."
+  }
+]
