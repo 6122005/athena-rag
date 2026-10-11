@@ -73,11 +73,16 @@ def main():
             file_bytes = uploaded_file.getvalue()
             file_name = uploaded_file.name
 
+            # Check if this file has been indexed
+            is_already_indexed = any(f["name"] == file_name for f in st.session_state.ingested_files)
+            if not is_already_indexed:
+                st.info("📌 Click the button below to index this document into the AI knowledge base.")
+
             if st.button("🚀 Ingest & Index Document", use_container_width=True, type="primary"):
                 progress_bar = st.progress(0, text=f"Analyzing {file_name}...")
 
                 try:
-                    progress_bar.progress(30, text="Extracting pages and text passages...")
+                    progress_bar.progress(20, text=f"Extracting text from {file_name}...")
                     if file_name.lower().endswith(".pdf"):
                         docs = extract_pdf_pages(
                             file_bytes,
@@ -97,16 +102,24 @@ def main():
                     if not docs:
                         st.error("No extractable text found in this file.")
                     else:
-                        progress_bar.progress(70, text=f"Embedding and storing {len(docs)} passages into ChromaDB...")
-                        ingested_count = ingest_documents(docs)
-                        progress_bar.progress(100, text="Complete!")
+                        total_docs = len(docs)
+                        def on_batch_progress(curr, tot):
+                            pct = min(100, int(25 + (curr / tot) * 75))
+                            progress_bar.progress(pct, text=f"Indexing chunk {curr} of {tot} ({pct}%)...")
+
+                        ingested_count = ingest_documents(docs, callback=on_batch_progress)
+                        progress_bar.progress(100, text="✅ Indexing Complete!")
 
                         if not any(f["name"] == file_name for f in st.session_state.ingested_files):
                             st.session_state.ingested_files.append({
                                 "name": file_name,
                                 "chunks": ingested_count,
                             })
-                        st.success(f"✅ Ingested **{ingested_count} chunks** from `{file_name}`!")
+
+                        # Rebuild graph to bind immediately to the updated vector store
+                        st.session_state.graph = build_graph()
+                        st.success(f"✅ Ready! Ingested **{ingested_count} chunks** from `{file_name}`.")
+                        st.rerun()
 
                 except Exception as e:
                     st.error(f"Error ingesting document: {e}")

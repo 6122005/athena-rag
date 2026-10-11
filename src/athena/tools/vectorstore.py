@@ -1,7 +1,8 @@
-"""Vector store abstraction. ChromaDB with automatic fallback between OpenAI and Local Embeddings."""
+"""Vector store abstraction. ChromaDB with automatic fallback and batch ingestion."""
 
 import logging
 import os
+from typing import Callable
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -23,7 +24,13 @@ class LocalDefaultEmbeddings(Embeddings):
         self._ef = ef.DefaultEmbeddingFunction()
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return self._ef(texts)
+        # Process in smaller internal batches to avoid CPU/memory stalls
+        batch_size = 32
+        results = []
+        for i in range(0, len(texts), batch_size):
+            chunk = texts[i : i + batch_size]
+            results.extend(self._ef(chunk))
+        return results
 
     def embed_query(self, text: str) -> list[float]:
         return self._ef([text])[0]
@@ -76,8 +83,13 @@ def _get_embeddings():
     return _embeddings
 
 
-def build_vectorstore(docs: list[dict], persist_dir: str = "./chroma_db"):
-    """Build or load a Chroma vector store from raw document dicts."""
+def build_vectorstore(
+    docs: list[dict],
+    persist_dir: str = "./chroma_db",
+    callback: Callable[[int, int], None] | None = None,
+    batch_size: int = 20,
+):
+    """Build or update a Chroma vector store with batch indexing and live progress callback."""
     global _vectorstore
 
     documents = [
@@ -85,12 +97,24 @@ def build_vectorstore(docs: list[dict], persist_dir: str = "./chroma_db"):
         for d in docs
     ]
 
-    _vectorstore = Chroma.from_documents(
-        documents=documents,
-        embedding=_get_embeddings(),
-        persist_directory=persist_dir,
-        collection_name="athena_knowledge",
-    )
+    if _vectorstore is None:
+        _vectorstore = Chroma(
+            embedding_function=_get_embeddings(),
+            persist_directory=persist_dir,
+            collection_name="athena_knowledge",
+        )
+
+    total = len(documents)
+    if total == 0:
+        return _vectorstore
+
+    # Ingest in chunks of 20 for memory safety on Streamlit Cloud containers
+    for i in range(0, total, batch_size):
+        batch = documents[i : i + batch_size]
+        _vectorstore.add_documents(batch)
+        if callback:
+            callback(min(i + batch_size, total), total)
+
     return _vectorstore
 
 

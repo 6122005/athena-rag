@@ -176,6 +176,7 @@ def ingest_documents(
     auto_chunk: bool = False,
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
+    callback=None,
 ) -> int:
     """Ingest a list of documents into the vector store."""
     validated_docs = [validate_document(d) for d in docs]
@@ -194,7 +195,7 @@ def ingest_documents(
     else:
         final_docs = validated_docs
 
-    build_vectorstore(final_docs, persist_dir=persist_dir)
+    build_vectorstore(final_docs, persist_dir=persist_dir, callback=callback)
     log_event(logger, "ingest_completed", count=len(final_docs), persist_dir=persist_dir)
     return len(final_docs)
 
